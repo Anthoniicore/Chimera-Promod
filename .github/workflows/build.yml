@@ -1,0 +1,48 @@
+name: Build Chimera-Promod
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build 32-bit Release DLL
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 MinGW32
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          suppress-deprecation-warnings: msystem-mingw32
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-binutils
+
+      - name: Build Chimera-Promod
+        shell: msys2 {0}
+        run: |
+          cmd.exe /c "build.bat release < NUL"
+
+      - name: Verify DLL
+        shell: msys2 {0}
+        run: |
+          test -f bin/chimera.dll
+          file bin/chimera.dll
+
+      - name: Upload chimera.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chimera-Promod-${{ github.sha }}
+          path: bin/chimera.dll
+          if-no-files-found: error
+          retention-days: 30
