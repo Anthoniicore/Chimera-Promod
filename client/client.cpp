@@ -11,6 +11,7 @@
 #include "settings.h"
 #include "command/console.h"
 #include "command/command.h"
+#include "command/voice.h"
 
 //#include "contributors/contributors.h"
 
@@ -61,8 +62,6 @@
 #include "visuals/letterbox.h"
 #include "visuals/server_ip.h"
 #include "visuals/vertical_field_of_view.h"
-
-
 #include "visuals/gametype_indicator.h"
 
 extern std::vector<ChimeraSignature> *signatures;
@@ -75,8 +74,7 @@ static void init() {
     extern bool already_set;
     auto &enabled = **reinterpret_cast<char **>(get_signature("enable_console_sig").address() + 1);
     already_set = enabled != 0;
-    if(!already_set)
-        enabled = 1;
+    if(!already_set) enabled = 1;
     remove_tick_event(init);
 
     settings_read_only(1);
@@ -86,13 +84,10 @@ static void init() {
     read_init_file("chimerainit.txt", "chimerainit.txt");
     sprintf(z,"%s\\chimera\\chimerainit.txt", halo_path());
     auto *f = fopen(z, "r");
-    if(f)
-    {
+    if(f) {
         fclose(f);
         read_init_file(z, "[-path]/chimerainit.txt");
-    }
-    else
-    {
+    } else {
         std::ofstream init(z);
         init << "###" << std::endl;
         init << "### chimerainit.txt" << std::endl;
@@ -117,10 +112,8 @@ void initialize_client() noexcept {
     commands = new std::vector<ChimeraCommand>;
     signatures = new std::vector<ChimeraSignature>;
     missing_signatures = new std::vector<std::string>;
-    if(!find_required_signatures())
-    {
-        for(size_t i=0;i<(*missing_signatures).size();i++)
-        {
+    if(!find_required_signatures()) {
+        for(size_t i=0;i<(*missing_signatures).size();i++) {
             char message[256] = {};
             sprintf(message, "Could not find %s signature. Make sure you're using Halo Custom Edition version 1.10.", (*missing_signatures)[i].data());
             MessageBox(NULL, message, "Chimera cannot load", MB_OK);
@@ -137,14 +130,9 @@ void initialize_client() noexcept {
     enable_descope_fix();
 
     QueryPerformanceFrequency(&performance_frequency);
-
-    //add_tick_event(set_contributors);
-
     initialize_overshield_glow();
 
-     if(find_magnetism_signatures()) {
-        fix_magnetism();
-    }
+    if(find_magnetism_signatures()) fix_magnetism();
 
     (*commands).emplace_back("chimera", chimera_command, nullptr,
         "This command is the commands directory for Chimera.\n\n"
@@ -174,14 +162,13 @@ void initialize_client() noexcept {
         "  - chimera_verbose_init"
     , 0, 1, true);
 
-    // Debug
     (*commands).emplace_back("chimera_block_mouse_acceleration", block_mouse_acceleration_command, "enhancements",
         "Get or set whether or not to block mouse acceleration. Note that some mice may still\n"
         "exhibit some mouse acceleration.\n\n"
         "Syntax:\n"
         "  - chimera_block_mouse_acceleration [true/false]"
     , 0, 1, find_block_mouse_acceleration_sigs(), true);
-    
+
     (*commands).emplace_back("chimera_mouse_sensitivity", mouse_sensitivity_command, "enhancements",
         "Set the horizontal and vertical mouse sensitivities.\n\n"
         "Values less than 1 do not work properly if mouse acceleration is enabled.\n\n"
@@ -218,7 +205,6 @@ void initialize_client() noexcept {
         "  - chimera_steps_volume false       - Disable."
     , 0, 1, true, true);
 
-
     (*commands).emplace_back("chimera_movement_predict", movement_predict_command, "enhancements",
         "Extrapolates object movement between ticks using engine velocity to reduce the\n"
         "teleport effect under lag. Works best with chimera_interpolate enabled.\n\n"
@@ -227,20 +213,11 @@ void initialize_client() noexcept {
         "  - chimera_movement_predict false  - Disable."
     , 0, 2, true, true);
 
-
     (*commands).emplace_back("chimera_skip_loading", skip_loading_command, "enhancements",
         "Get or set whether or not to skip the multiplayer loading screen.\n\n"
         "Syntax:\n"
         "  - chimera_skip_loading [true/false]"
     , 0, 1, find_loading_screen_signatures(), true);
-
-
-    // Fixes
-    /*(*commands).emplace_back("chimera_aim_assist", aim_assist_command, "fixes",
-        "Get or set whether or not fix aim assist for gamepads. This feature is on by default.\n\n"
-        "Syntax:\n"
-        "  - chimera_aim_assist [true/false]"
-    , 0, 1, true, true);*/
 
     (*commands).emplace_back("chimera_fov_fix", fov_fix_command, "fixes",
         "Get or set whether or not to fix the FOV. This will make FOV mods more accurate.\n\n"
@@ -283,8 +260,6 @@ void initialize_client() noexcept {
         "  - chimera_chat_fix [true/false]"
     , 0, 1, true, true);
 
-    // Interpolation
-
     (*commands).emplace_back("chimera_interpolate", interpolate_command, "interpolation",
         "Get or set the interpolation level. Interpolation smoothes out object movement between\n"
         "ticks, providing a substantial visual improvement. Higher levels incur greater CPU usage and\n"
@@ -306,9 +281,6 @@ void initialize_client() noexcept {
         "  - chimera_interpolate_predict [0-3]"
     , 0, 1, find_interpolation_signatures(), true);
 
-
-    // Visuals
-
     (*commands).emplace_back("chimera_af", af_command, "visuals",
         "Get or set whether or not to enable anisotropic filtering.\n\n"
         "Syntax:\n"
@@ -323,7 +295,6 @@ void initialize_client() noexcept {
 
     (*commands).emplace_back("chimera_block_gametype_indicator", block_gametype_indicator_command, "visuals",
         "Get or set whether or not to turn off the gametype indicator.\n\n"
-        "\n"
         "Syntax:\n"
         "  - chimera_block_gametype_indicator [true/false]"
     , 0, 1, find_gametype_indicator_sig(), true);
@@ -336,14 +307,12 @@ void initialize_client() noexcept {
 
     (*commands).emplace_back("chimera_block_vsync", block_vsync_command, "visuals",
         "Get or set whether or not to turn vSync off startup.\n\n"
-        "\n"
         "Syntax:\n"
         "  - chimera_block_vsync [true/false]"
     , 0, 1, find_set_resolution_signatures(), true);
 
     (*commands).emplace_back("chimera_set_resolution", set_resolution_command, "visuals",
-        "Change Halo's resolution. Width and height can be either resolution in pixels or an aspect\n"
-        "ratio.\n\n"
+        "Change Halo's resolution. Width and height can be either resolution in pixels or an aspect ratio.\n\n"
         "Syntax:\n"
         "  - chimera_set_resolution <width> <height> [refresh rate] [vsync] [windowed]"
     , 2, 5, find_set_resolution_signatures(), true);
@@ -355,14 +324,10 @@ void initialize_client() noexcept {
     , 0, 1, find_uncap_cinematic_signatures(), true);
 
     (*commands).emplace_back("chimera_vfov", vfov_command, "visuals",
-        "Get or change your FOV by attempting to lock to a specific vertical FOV. This will\n"
-        "distort your FOV if HAC2, Open Sauce, etc. are modifying your horizontal FOV. 1\n"
-        "defaults to 55.41 degrees, or Halo’s standard FOV.\n\n"
+        "Get or change your FOV by attempting to lock to a specific vertical FOV. This will distort your FOV if HAC2, Open Sauce, etc. are modifying your horizontal FOV. 1 defaults to 55.41 degrees, or Halo's standard FOV.\n\n"
         "Syntax:\n"
         "  - chimera_vfov [VFOV]"
     , 0, 1, find_interpolation_signatures(), true);
-
-    // Startup
 
     (*commands).emplace_back("chimera_cache", cache_command, "startup",
         "Get or set whether or not to use a cache for fast startup.\n\n"
@@ -377,31 +342,52 @@ void initialize_client() noexcept {
     , 0, 0, find_fast_startup_sigs(), false);
 
     (*commands).emplace_back("chimera_modded_stock_maps", modded_stock_maps_command, "startup",
-        "Get or set whether or not stock maps will use hardcoded CRC32s. This may be required for\n"
-        "some maps to work.\n\n"
+        "Get or set whether or not stock maps will use hardcoded CRC32s. This may be required for some maps to work.\n\n"
         "Syntax:\n"
         "  - chimera_modded_stock_maps [true/false]"
     , 0, 1, find_fast_startup_sigs(), true);
 
+    (*commands).emplace_back("chimera_voice", voice_command, "enhancements",
+        "Enable or disable voice chat.\n\nSyntax:\n  - chimera_voice [on/off]"
+    , 0, 1, true, true);
+    (*commands).emplace_back("chimera_voice_all", voice_all_command, "enhancements",
+        "Force voice chat to ALL players.\n\nSyntax:\n  - chimera_voice_all"
+    , 0, 0, true, false);
+    (*commands).emplace_back("chimera_voice_team", voice_team_command, "enhancements",
+        "Force voice chat to your team.\n\nSyntax:\n  - chimera_voice_team"
+    , 0, 0, true, false);
+    (*commands).emplace_back("chimera_voice_host", voice_host_command, "enhancements",
+        "Set the voice relay host and port manually.\n\nSyntax:\n  - chimera_voice_host <host> <port>"
+    , 2, 2, true, false);
+    (*commands).emplace_back("chimera_voice_ptt", voice_ptt_command, "enhancements",
+        "Set or show the push-to-talk key. Default is V.\n\nSyntax:\n  - chimera_voice_ptt [key|vk_code]"
+    , 0, 1, true, true);
+    (*commands).emplace_back("chimera_voice_speakers", voice_speakers_command, "enhancements",
+        "List players currently sending voice audio.\n\nSyntax:\n  - chimera_voice_speakers"
+    , 0, 0, true, false);
+    (*commands).emplace_back("chimera_voice_volume", voice_volume_command, "enhancements",
+        "Get or set voice playback volume. 1.0 is original volume; default is 1.5.\n\nSyntax:\n  - chimera_voice_volume [0.0-4.0]"
+    , 0, 1, true, true);
+    (*commands).emplace_back("chimera_voice_status", voice_status_command, "enhancements",
+        "Show voice chat status and packet counters.\n\nSyntax:\n  - chimera_voice_status"
+    , 0, 0, true, false);
+
+    set_up_voice_connection_watcher();
+
     if(find_fast_startup_sigs()) setup_fast_startup();
 
-    if(custom_keystone_in_use())
-    {
-      if(find_pc_map_compat_sigs()) setup_pc_map_compatibility();
-      if(find_keystone_sigs()) setup_keystone_override();
+    if(custom_keystone_in_use()) {
+        if(find_pc_map_compat_sigs()) setup_pc_map_compatibility();
+        if(find_keystone_sigs()) setup_keystone_override();
     }
     if(find_console_fade_fix_sig()) setup_console_text_fix();
-
 
     add_frame_event(check_keys);
 }
 
 void uninitialize_client() noexcept {
     destroy_lua();
-    for(size_t i=0;i<signatures->size();i++)
-    {
-        (*signatures)[i].undo();
-    }
+    for(size_t i=0;i<signatures->size();i++) (*signatures)[i].undo();
     delete signatures;
     signatures = nullptr;
     delete missing_signatures;
