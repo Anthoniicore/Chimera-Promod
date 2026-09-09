@@ -23,4 +23,6 @@ namespace Chimera {
     uint32_t voice_packets_sent_count() noexcept;
     uint32_t voice_packets_received_count() noexcept;
     uint32_t voice_packets_wrong_room_count() noexcept;
+    float get_voice_audio_playback_volume() noexcept;
+    void set_voice_audio_playback_volume(float volume) noexcept;
 }
