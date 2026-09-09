@@ -12,7 +12,10 @@ namespace Chimera {
     static bool g_voice_chat_initialized = false;
     static bool g_voice_chat_enabled = false;
     namespace {
-        std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_last_heard_from;
+        std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> &last_heard_from() {
+            static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> value;
+            return value;
+        }
         uint32_t g_packets_sent = 0, g_packets_received = 0, g_packets_wrong_room = 0, g_room_id = 0;
         VoiceChatChannel g_voice_chat_channel = VoiceChatChannel::ALL;
 
@@ -42,17 +45,17 @@ namespace Chimera {
         }
     }
 
-    void set_voice_chat_room(uint32_t room_id) noexcept { if(room_id != g_room_id) g_last_heard_from.clear(); g_room_id = room_id; }
+    void set_voice_chat_room(uint32_t room_id) noexcept { if(room_id != g_room_id) last_heard_from().clear(); g_room_id = room_id; }
     uint32_t voice_chat_room() noexcept { return g_room_id; }
     VoiceChatChannel voice_chat_channel() noexcept { return g_voice_chat_channel; }
-    void set_voice_chat_channel(VoiceChatChannel channel) noexcept { if(g_voice_chat_channel == channel) return; g_last_heard_from.clear(); g_voice_chat_channel = channel; }
+    void set_voice_chat_channel(VoiceChatChannel channel) noexcept { if(g_voice_chat_channel == channel) return; last_heard_from().clear(); g_voice_chat_channel = channel; }
     void initialize_voice_chat() noexcept { g_voice_chat_initialized = true; }
 
     void shutdown_voice_chat() noexcept {
         if(!g_voice_chat_initialized) return;
         g_voice_chat_enabled = false;
         stop_voice_audio_capture(); shutdown_voice_audio_playback(); shutdown_voice_codec(); shutdown_voice_transport();
-        g_voice_chat_initialized = false; g_room_id = 0; g_last_heard_from.clear();
+        g_voice_chat_initialized = false; g_room_id = 0; last_heard_from().clear();
     }
     bool voice_chat_initialized() noexcept { return g_voice_chat_initialized; }
     bool voice_chat_enabled() noexcept { return g_voice_chat_initialized && g_voice_chat_enabled; }
@@ -100,7 +103,7 @@ namespace Chimera {
             if(header.flags & VOICE_PACKET_FLAG_KEEPALIVE) continue;
             if(!sender_audible(header.sender_id)) continue;
             std::vector<int16_t> pcm; if(!decode_voice_audio_packet(payload, header.payload_size, pcm)) continue;
-            if(queue_voice_audio_playback(pcm.data(), pcm.size())) { g_last_heard_from[header.sender_id] = std::chrono::steady_clock::now(); ++g_packets_received; }
+            if(queue_voice_audio_playback(pcm.data(), pcm.size())) { last_heard_from()[header.sender_id] = std::chrono::steady_clock::now(); ++g_packets_received; }
         }
     }
 
@@ -109,12 +112,10 @@ namespace Chimera {
     uint32_t voice_packets_wrong_room_count() noexcept { return g_packets_wrong_room; }
     std::vector<uint32_t> get_active_voice_speakers(uint32_t max_age_ms) noexcept {
         std::vector<uint32_t> speakers; const auto now = std::chrono::steady_clock::now();
-        for(auto &entry : g_last_heard_from) {
+        for(auto &entry : last_heard_from()) {
             const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry.second).count();
             if(age >= 0 && static_cast<uint32_t>(age) <= max_age_ms) speakers.push_back(entry.first);
         }
         return speakers;
     }
-
-    namespace { struct VoiceChatLifecycle { VoiceChatLifecycle() noexcept { initialize_voice_chat(); } ~VoiceChatLifecycle() { shutdown_voice_chat(); } }; static VoiceChatLifecycle g_voice_chat_lifecycle; }
 }
