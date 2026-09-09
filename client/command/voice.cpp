@@ -9,10 +9,11 @@
 #include "../voice_chat/voice_chat.h"
 #include "../voice_chat/voice_transport.h"
 
-#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -26,7 +27,6 @@ namespace {
     constexpr uint16_t DEFAULT_VOICE_PORT = 30777;
     constexpr uint16_t DEFAULT_HALO_PORT = 2302;
     constexpr DWORD KEEPALIVE_INTERVAL_MS = 20000;
-
     bool g_voice_frame_registered = false;
     unsigned int g_push_to_talk_key = 'V';
     uint32_t g_sequence = 0;
@@ -105,7 +105,6 @@ namespace {
         if(!Chimera::voice_chat_enabled()) return;
         update_voice_channel_from_game();
         Chimera::process_received_voice_packets();
-
         const bool talking = (GetAsyncKeyState(static_cast<int>(g_push_to_talk_key)) & 0x8000) != 0;
         if(talking) {
             bool sent_any = false;
