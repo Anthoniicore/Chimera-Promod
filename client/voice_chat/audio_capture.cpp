@@ -20,11 +20,19 @@ DEFINE_GUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80,0x
 namespace Chimera {
     namespace {
         constexpr size_t MAX_BUFFERED_SAMPLES = VOICE_AUDIO_SAMPLE_RATE * 10;
-        std::atomic<bool> g_capture_running{false};
-        std::atomic<bool> g_capture_stop_requested{false};
-        std::thread g_capture_thread;
-        std::mutex g_audio_mutex;
-        std::deque<int16_t> g_audio_samples;
+
+        struct CaptureState {
+            std::atomic<bool> running{false};
+            std::atomic<bool> stop_requested{false};
+            std::thread thread;
+            std::mutex mutex;
+            std::deque<int16_t> samples;
+        };
+
+        CaptureState &capture_state() {
+            static CaptureState state;
+            return state;
+        }
 
         bool format_is_pcm16(const WAVEFORMATEX *format) noexcept {
             if(format->wBitsPerSample != 16) return false;
@@ -75,13 +83,15 @@ namespace Chimera {
                 }
             }
             if(normalized.empty()) return;
-            std::lock_guard<std::mutex> lock(g_audio_mutex);
-            const size_t overflow = g_audio_samples.size() + normalized.size() > MAX_BUFFERED_SAMPLES ? g_audio_samples.size() + normalized.size() - MAX_BUFFERED_SAMPLES : 0;
-            for(size_t i = 0; i < overflow && !g_audio_samples.empty(); ++i) g_audio_samples.pop_front();
-            g_audio_samples.insert(g_audio_samples.end(), normalized.begin(), normalized.end());
+            auto &state = capture_state();
+            std::lock_guard<std::mutex> lock(state.mutex);
+            const size_t overflow = state.samples.size() + normalized.size() > MAX_BUFFERED_SAMPLES ? state.samples.size() + normalized.size() - MAX_BUFFERED_SAMPLES : 0;
+            for(size_t i = 0; i < overflow && !state.samples.empty(); ++i) state.samples.pop_front();
+            state.samples.insert(state.samples.end(), normalized.begin(), normalized.end());
         }
 
         void capture_thread_main() noexcept {
+            auto &state = capture_state();
             const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             const bool com_initialized = SUCCEEDED(com_result);
             IMMDeviceEnumerator *enumerator = nullptr;
@@ -98,11 +108,11 @@ namespace Chimera {
                 if(FAILED(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 0, 0, format, nullptr))) break;
                 if(FAILED(audio_client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void **>(&capture_client)))) break;
                 if(FAILED(audio_client->Start())) break;
-                g_capture_running.store(true, std::memory_order_release);
-                while(!g_capture_stop_requested.load(std::memory_order_acquire)) {
+                state.running.store(true, std::memory_order_release);
+                while(!state.stop_requested.load(std::memory_order_acquire)) {
                     UINT32 packet_length = 0;
                     if(FAILED(capture_client->GetNextPacketSize(&packet_length))) break;
-                    while(packet_length != 0 && !g_capture_stop_requested.load(std::memory_order_acquire)) {
+                    while(packet_length != 0 && !state.stop_requested.load(std::memory_order_acquire)) {
                         BYTE *data = nullptr; UINT32 frames = 0; DWORD flags = 0;
                         if(FAILED(capture_client->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) { packet_length = 0; break; }
                         append_normalized_samples(data, frames, flags, format, resample_accumulator);
@@ -119,43 +129,48 @@ namespace Chimera {
             if(device) device->Release();
             if(enumerator) enumerator->Release();
             if(com_initialized) CoUninitialize();
-            g_capture_running.store(false, std::memory_order_release);
+            state.running.store(false, std::memory_order_release);
         }
     }
 
     bool start_voice_audio_capture() noexcept {
-        if(g_capture_running.load(std::memory_order_acquire) || g_capture_thread.joinable()) return true;
-        g_capture_stop_requested.store(false, std::memory_order_release);
-        try { g_capture_thread = std::thread(capture_thread_main); return true; } catch(...) { return false; }
+        auto &state = capture_state();
+        if(state.running.load(std::memory_order_acquire) || state.thread.joinable()) return true;
+        state.stop_requested.store(false, std::memory_order_release);
+        try { state.thread = std::thread(capture_thread_main); return true; } catch(...) { return false; }
     }
 
     void stop_voice_audio_capture() noexcept {
-        g_capture_stop_requested.store(true, std::memory_order_release);
-        if(g_capture_thread.joinable()) g_capture_thread.join();
-        g_capture_running.store(false, std::memory_order_release);
+        auto &state = capture_state();
+        state.stop_requested.store(true, std::memory_order_release);
+        if(state.thread.joinable()) state.thread.join();
+        state.running.store(false, std::memory_order_release);
     }
 
-    bool voice_audio_capture_running() noexcept { return g_capture_running.load(std::memory_order_acquire); }
+    bool voice_audio_capture_running() noexcept { return capture_state().running.load(std::memory_order_acquire); }
 
     size_t voice_audio_buffered_samples() noexcept {
-        std::lock_guard<std::mutex> lock(g_audio_mutex);
-        return g_audio_samples.size();
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        return state.samples.size();
     }
 
     std::vector<int16_t> consume_voice_audio_samples(size_t maximum_samples) {
-        std::lock_guard<std::mutex> lock(g_audio_mutex);
-        const size_t count = std::min(maximum_samples, g_audio_samples.size());
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        const size_t count = std::min(maximum_samples, state.samples.size());
         std::vector<int16_t> output;
         output.reserve(count);
-        for(size_t i = 0; i < count; ++i) { output.push_back(g_audio_samples.front()); g_audio_samples.pop_front(); }
+        for(size_t i = 0; i < count; ++i) { output.push_back(state.samples.front()); state.samples.pop_front(); }
         return output;
     }
 
     bool consume_voice_audio_packet(std::vector<int16_t> &packet) {
-        std::lock_guard<std::mutex> lock(g_audio_mutex);
-        if(g_audio_samples.size() < VOICE_AUDIO_PACKET_SAMPLES) return false;
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if(state.samples.size() < VOICE_AUDIO_PACKET_SAMPLES) return false;
         packet.resize(VOICE_AUDIO_PACKET_SAMPLES);
-        for(size_t i = 0; i < VOICE_AUDIO_PACKET_SAMPLES; ++i) { packet[i] = g_audio_samples.front(); g_audio_samples.pop_front(); }
+        for(size_t i = 0; i < VOICE_AUDIO_PACKET_SAMPLES; ++i) { packet[i] = state.samples.front(); state.samples.pop_front(); }
         return true;
     }
 }
