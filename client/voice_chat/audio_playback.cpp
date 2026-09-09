@@ -9,15 +9,23 @@
 
 namespace Chimera {
     namespace {
-        HWAVEOUT g_wave = nullptr;
-        std::mutex g_mutex;
-        float g_voice_volume = 1.5f;
-        struct Buffer { WAVEHDR header{}; std::vector<int16_t> samples; };
-        std::list<Buffer> g_buffers;
+        struct PlaybackState {
+            HWAVEOUT wave = nullptr;
+            std::mutex mutex;
+            float volume = 1.5f;
+            struct Buffer { WAVEHDR header{}; std::vector<int16_t> samples; };
+            std::list<Buffer> buffers;
+        };
+
+        PlaybackState &playback_state() {
+            static PlaybackState state;
+            return state;
+        }
 
         void apply_voice_volume(std::vector<int16_t> &samples) noexcept {
+            auto &state = playback_state();
             for(auto &sample : samples) {
-                const float amplified = static_cast<float>(sample) * g_voice_volume;
+                const float amplified = static_cast<float>(sample) * state.volume;
                 if(amplified > 32767.0f) sample = 32767;
                 else if(amplified < -32768.0f) sample = -32768;
                 else sample = static_cast<int16_t>(amplified);
@@ -26,8 +34,9 @@ namespace Chimera {
     }
 
     bool initialize_voice_audio_playback() noexcept {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if(g_wave) return true;
+        auto &state = playback_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if(state.wave) return true;
         WAVEFORMATEX format{};
         format.wFormatTag = WAVE_FORMAT_PCM;
         format.nChannels = static_cast<WORD>(VOICE_AUDIO_CHANNELS);
@@ -35,53 +44,61 @@ namespace Chimera {
         format.wBitsPerSample = 16;
         format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8);
         format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-        return waveOutOpen(&g_wave, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) == MMSYSERR_NOERROR;
+        return waveOutOpen(&state.wave, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) == MMSYSERR_NOERROR;
     }
 
     void shutdown_voice_audio_playback() noexcept {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if(!g_wave) return;
-        waveOutReset(g_wave);
-        for(auto &buffer : g_buffers) if(buffer.header.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_wave, &buffer.header, sizeof(buffer.header));
-        g_buffers.clear();
-        waveOutClose(g_wave);
-        g_wave = nullptr;
+        auto &state = playback_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if(!state.wave) return;
+        waveOutReset(state.wave);
+        for(auto &buffer : state.buffers) if(buffer.header.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(state.wave, &buffer.header, sizeof(buffer.header));
+        state.buffers.clear();
+        waveOutClose(state.wave);
+        state.wave = nullptr;
     }
 
-    bool voice_audio_playback_initialized() noexcept { return g_wave != nullptr; }
+    bool voice_audio_playback_initialized() noexcept { return playback_state().wave != nullptr; }
 
     bool queue_voice_audio_playback(const int16_t *pcm, size_t samples) noexcept {
         if(!pcm || samples == 0 || !initialize_voice_audio_playback()) return false;
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if(g_buffers.size() >= 32) {
-            for(auto it = g_buffers.begin(); it != g_buffers.end(); ++it) {
+        auto &state = playback_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if(state.buffers.size() >= 32) {
+            for(auto it = state.buffers.begin(); it != state.buffers.end(); ++it) {
                 if(it->header.dwFlags & WHDR_DONE) {
-                    waveOutUnprepareHeader(g_wave, &it->header, sizeof(it->header));
-                    g_buffers.erase(it);
+                    waveOutUnprepareHeader(state.wave, &it->header, sizeof(it->header));
+                    state.buffers.erase(it);
                     break;
                 }
             }
-            if(g_buffers.size() >= 32) return false;
+            if(state.buffers.size() >= 32) return false;
         }
-        g_buffers.emplace_back();
-        auto it = g_buffers.end(); --it;
-        Buffer &buffer = *it;
+        state.buffers.emplace_back();
+        auto it = state.buffers.end(); --it;
+        auto &buffer = *it;
         buffer.samples.assign(pcm, pcm + samples);
         apply_voice_volume(buffer.samples);
         buffer.header.lpData = reinterpret_cast<LPSTR>(buffer.samples.data());
         buffer.header.dwBufferLength = static_cast<DWORD>(buffer.samples.size() * sizeof(int16_t));
-        if(waveOutPrepareHeader(g_wave, &buffer.header, sizeof(buffer.header)) != MMSYSERR_NOERROR) { g_buffers.erase(it); return false; }
-        if(waveOutWrite(g_wave, &buffer.header, sizeof(buffer.header)) != MMSYSERR_NOERROR) {
-            waveOutUnprepareHeader(g_wave, &buffer.header, sizeof(buffer.header));
-            g_buffers.erase(it);
+        if(waveOutPrepareHeader(state.wave, &buffer.header, sizeof(buffer.header)) != MMSYSERR_NOERROR) { state.buffers.erase(it); return false; }
+        if(waveOutWrite(state.wave, &buffer.header, sizeof(buffer.header)) != MMSYSERR_NOERROR) {
+            waveOutUnprepareHeader(state.wave, &buffer.header, sizeof(buffer.header));
+            state.buffers.erase(it);
             return false;
         }
         return true;
     }
 
-    float get_voice_audio_playback_volume() noexcept { std::lock_guard<std::mutex> lock(g_mutex); return g_voice_volume; }
+    float get_voice_audio_playback_volume() noexcept {
+        auto &state = playback_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        return state.volume;
+    }
+
     void set_voice_audio_playback_volume(float volume) noexcept {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        g_voice_volume = std::max(0.0f, std::min(volume, 4.0f));
+        auto &state = playback_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.volume = std::max(0.0f, std::min(volume, 4.0f));
     }
 }
