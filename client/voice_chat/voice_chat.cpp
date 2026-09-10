@@ -36,8 +36,15 @@ namespace Chimera {
             if(*reinterpret_cast<uint16_t *>(data) == 0xFFFF) return 0xFF;
             return *reinterpret_cast<uint8_t *>(data + 32);
         }
-        bool sender_audible(uint32_t sender_id) noexcept {
-            if(g_voice_chat_channel == VoiceChatChannel::ALL) return true;
+        uint8_t voice_packet_flags() noexcept {
+            return g_voice_chat_channel == VoiceChatChannel::ALL ? VOICE_PACKET_FLAG_ALL : 0;
+        }
+        bool sender_audible(uint32_t sender_id, uint8_t packet_flags) noexcept {
+            // Reception is determined by the sender's advertised scope, not
+            // by the receiver's local voice command. This means /voice_all
+            // makes a player audible to everyone while that player still only
+            // hears team-scoped packets from players on their own team.
+            if(packet_flags & VOICE_PACKET_FLAG_ALL) return true;
             const uint8_t local = local_team();
             if(local == 0xFF) return true;
             const uint8_t sender = player_team_by_machine(sender_id);
@@ -75,7 +82,7 @@ namespace Chimera {
     bool consume_serialized_voice_packet(uint32_t sender_id, uint32_t &sequence, uint32_t timestamp, std::vector<uint8_t> &packet) noexcept {
         std::vector<int16_t> pcm; if(!consume_voice_audio_packet(pcm)) return false;
         std::vector<uint8_t> opus_packet; if(!encode_voice_audio_packet(pcm.data(), pcm.size(), opus_packet)) return false;
-        if(!build_voice_packet(g_room_id, sender_id, sequence, timestamp, opus_packet.data(), opus_packet.size(), packet)) return false;
+        if(!build_voice_packet(g_room_id, sender_id, sequence, timestamp, voice_packet_flags(), opus_packet.data(), opus_packet.size(), packet)) return false;
         ++sequence; return true;
     }
 
@@ -89,7 +96,7 @@ namespace Chimera {
 
     bool send_voice_keepalive_packet(uint32_t sender_id) noexcept {
         if(!voice_chat_enabled() || !voice_transport_has_destination() || g_room_id == 0) return false;
-        std::vector<uint8_t> packet; if(!build_voice_keepalive_packet(g_room_id, sender_id, packet)) return false;
+        std::vector<uint8_t> packet; if(!build_voice_keepalive_packet(g_room_id, sender_id, voice_packet_flags(), packet)) return false;
         return send_voice_transport_packet(packet.data(), packet.size());
     }
 
@@ -101,7 +108,7 @@ namespace Chimera {
             if(!parse_voice_packet(packet.data(), packet.size(), header, payload)) continue;
             if(header.room_id != g_room_id) { ++g_packets_wrong_room; continue; }
             if(header.flags & VOICE_PACKET_FLAG_KEEPALIVE) continue;
-            if(!sender_audible(header.sender_id)) continue;
+            if(!sender_audible(header.sender_id, header.flags)) continue;
             std::vector<int16_t> pcm; if(!decode_voice_audio_packet(payload, header.payload_size, pcm)) continue;
             if(queue_voice_audio_playback(pcm.data(), pcm.size())) { last_heard_from()[header.sender_id] = std::chrono::steady_clock::now(); ++g_packets_received; }
         }
