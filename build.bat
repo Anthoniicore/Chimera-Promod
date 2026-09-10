@@ -52,6 +52,7 @@ g++ -c client/settings.cpp %ARGS% -o bin/client__settings.o
 
 g++ -c client/command/command.cpp %ARGS% -o bin/client__command__command.o
 g++ -c client/command/console.cpp %ARGS% -o bin/client__command__console.o
+g++ -c client/command/voice.cpp %ARGS% -o bin/client__command__voice.o
 
 g++ -c client/debug/devmode.cpp %ARGS% -o bin/client__debug__devmode.o
 
@@ -111,6 +112,16 @@ g++ -c client/lua/lua_io.cpp %ARGS% -o bin/client__lua__lua_io.o
 
 g++ -c client/messaging/messaging.cpp -masm=intel -o bin/client__messaging__messaging.o
 
+REM Voice chat
+g++ -c client/command/voice.cpp %ARGS% -o bin/client__command__voice.o
+gcc -c client/voice_connect.S %ARGS% -o bin/client__voice_connect.o
+g++ -c client/voice_chat/audio_capture.cpp %ARGS% -o bin/client__voice_chat__audio_capture.o
+g++ -c client/voice_chat/audio_playback.cpp %ARGS% -o bin/client__voice_chat__audio_playback.o
+g++ -c client/voice_chat/voice_codec.cpp %ARGS% -o bin/client__voice_chat__voice_codec.o
+g++ -c client/voice_chat/voice_packet.cpp %ARGS% -o bin/client__voice_chat__voice_packet.o
+g++ -c client/voice_chat/voice_transport.cpp %ARGS% -o bin/client__voice_chat__voice_transport.o
+g++ -c client/voice_chat/voice_chat.cpp %ARGS% -o bin/client__voice_chat__voice_chat.o
+
 gcc -c client/startup/crc32.c %ARGS% -o bin/client__startup__crc32.o
 g++ -c client/startup/fast_startup.cpp %ARGS% -o bin/client__startup__fast_startup.o
 
@@ -127,5 +138,6 @@ g++ -c code_injection/signature.cpp %ARGS% -o bin/code_injection__signature.o
 g++ -c math/data_types.cpp %ARGSFAST% -o bin/math__data_types.o
 
 :END
-g++ bin/* %LARGS% -L client/lua/lua/bin -llua -shared -lws2_32 -lwinmm -static-libgcc -static-libstdc++ -static -luserenv -static -static -ladvapi32 -o "bin/chimera.dll"
+g++ bin/* %LARGS% -shared -L client/lua/lua/bin -llua -lws2_32 -lwinmm -lole32 -lopus -static-libgcc -static-libstdc++ -static -luserenv -static -ladvapi32 -static -o "bin/chimera.dll"
+if errorlevel 1 exit /b 1
 pause

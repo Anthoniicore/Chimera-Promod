@@ -1,0 +1,176 @@
+#include "audio_capture.h"
+
+#include <windows.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <ksmedia.h>
+#include <initguid.h>
+DEFINE_GUID(KSDATAFORMAT_SUBTYPE_PCM,        0x00000001, 0x0000, 0x0010, 0x80,0x00,0x00,0xAA,0x00,0x38,0x9B,0x71);
+DEFINE_GUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80,0x00,0x00,0xAA,0x00,0x38,0x9B,0x71);
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+namespace Chimera {
+    namespace {
+        constexpr size_t MAX_BUFFERED_SAMPLES = VOICE_AUDIO_SAMPLE_RATE * 10;
+
+        struct CaptureState {
+            std::atomic<bool> running{false};
+            std::atomic<bool> stop_requested{false};
+            std::thread thread;
+            std::mutex mutex;
+            std::deque<int16_t> samples;
+        };
+
+        CaptureState &capture_state() {
+            static CaptureState state;
+            return state;
+        }
+
+        bool format_is_pcm16(const WAVEFORMATEX *format) noexcept {
+            if(format->wBitsPerSample != 16) return false;
+            if(format->wFormatTag == WAVE_FORMAT_PCM) return true;
+            if(format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22)
+                return reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(format)->SubFormat == KSDATAFORMAT_SUBTYPE_PCM;
+            return false;
+        }
+
+        bool format_is_float32(const WAVEFORMATEX *format) noexcept {
+            if(format->wBitsPerSample != 32) return false;
+            if(format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
+            if(format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22)
+                return reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(format)->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+            return false;
+        }
+
+        int16_t mono_sample_from_frame(const BYTE *data, UINT32 frame, const WAVEFORMATEX *format, bool pcm16, bool float32) noexcept {
+            if(!data || format->nChannels == 0) return 0;
+            const size_t channels = format->nChannels;
+            double mixed = 0.0;
+            if(pcm16) {
+                const auto *samples = reinterpret_cast<const int16_t *>(data) + static_cast<size_t>(frame) * channels;
+                for(size_t c = 0; c < channels; ++c) mixed += samples[c];
+            } else if(float32) {
+                const auto *samples = reinterpret_cast<const float *>(data) + static_cast<size_t>(frame) * channels;
+                for(size_t c = 0; c < channels; ++c) mixed += std::clamp(static_cast<double>(samples[c]), -1.0, 1.0) * 32767.0;
+            } else return 0;
+            mixed /= static_cast<double>(channels);
+            mixed = std::clamp(mixed, -32768.0, 32767.0);
+            return static_cast<int16_t>(std::lrint(mixed));
+        }
+
+        void append_normalized_samples(const BYTE *data, UINT32 frames, DWORD flags, const WAVEFORMATEX *format, uint64_t &resample_accumulator) noexcept {
+            if(!format || format->nSamplesPerSec == 0 || frames == 0) return;
+            const bool pcm16 = format_is_pcm16(format);
+            const bool float32 = format_is_float32(format);
+            if(!pcm16 && !float32) return;
+            std::vector<int16_t> normalized;
+            normalized.reserve(static_cast<size_t>(frames) * VOICE_AUDIO_SAMPLE_RATE / format->nSamplesPerSec + 4);
+            const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+            for(UINT32 frame = 0; frame < frames; ++frame) {
+                const int16_t sample = silent ? 0 : mono_sample_from_frame(data, frame, format, pcm16, float32);
+                resample_accumulator += VOICE_AUDIO_SAMPLE_RATE;
+                while(resample_accumulator >= format->nSamplesPerSec) {
+                    normalized.push_back(sample);
+                    resample_accumulator -= format->nSamplesPerSec;
+                }
+            }
+            if(normalized.empty()) return;
+            auto &state = capture_state();
+            std::lock_guard<std::mutex> lock(state.mutex);
+            const size_t overflow = state.samples.size() + normalized.size() > MAX_BUFFERED_SAMPLES ? state.samples.size() + normalized.size() - MAX_BUFFERED_SAMPLES : 0;
+            for(size_t i = 0; i < overflow && !state.samples.empty(); ++i) state.samples.pop_front();
+            state.samples.insert(state.samples.end(), normalized.begin(), normalized.end());
+        }
+
+        void capture_thread_main() noexcept {
+            auto &state = capture_state();
+            const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            const bool com_initialized = SUCCEEDED(com_result);
+            IMMDeviceEnumerator *enumerator = nullptr;
+            IMMDevice *device = nullptr;
+            IAudioClient *audio_client = nullptr;
+            IAudioCaptureClient *capture_client = nullptr;
+            WAVEFORMATEX *format = nullptr;
+            uint64_t resample_accumulator = 0;
+            do {
+                if(!com_initialized || FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void **>(&enumerator)))) break;
+                if(FAILED(enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device))) break;
+                if(FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&audio_client)))) break;
+                if(FAILED(audio_client->GetMixFormat(&format))) break;
+                if(FAILED(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 0, 0, format, nullptr))) break;
+                if(FAILED(audio_client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void **>(&capture_client)))) break;
+                if(FAILED(audio_client->Start())) break;
+                state.running.store(true, std::memory_order_release);
+                while(!state.stop_requested.load(std::memory_order_acquire)) {
+                    UINT32 packet_length = 0;
+                    if(FAILED(capture_client->GetNextPacketSize(&packet_length))) break;
+                    while(packet_length != 0 && !state.stop_requested.load(std::memory_order_acquire)) {
+                        BYTE *data = nullptr; UINT32 frames = 0; DWORD flags = 0;
+                        if(FAILED(capture_client->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) { packet_length = 0; break; }
+                        append_normalized_samples(data, frames, flags, format, resample_accumulator);
+                        capture_client->ReleaseBuffer(frames);
+                        if(FAILED(capture_client->GetNextPacketSize(&packet_length))) packet_length = 0;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                audio_client->Stop();
+            } while(false);
+            if(format) CoTaskMemFree(format);
+            if(capture_client) capture_client->Release();
+            if(audio_client) audio_client->Release();
+            if(device) device->Release();
+            if(enumerator) enumerator->Release();
+            if(com_initialized) CoUninitialize();
+            state.running.store(false, std::memory_order_release);
+        }
+    }
+
+    bool start_voice_audio_capture() noexcept {
+        auto &state = capture_state();
+        if(state.running.load(std::memory_order_acquire) || state.thread.joinable()) return true;
+        state.stop_requested.store(false, std::memory_order_release);
+        try { state.thread = std::thread(capture_thread_main); return true; } catch(...) { return false; }
+    }
+
+    void stop_voice_audio_capture() noexcept {
+        auto &state = capture_state();
+        state.stop_requested.store(true, std::memory_order_release);
+        if(state.thread.joinable()) state.thread.join();
+        state.running.store(false, std::memory_order_release);
+    }
+
+    bool voice_audio_capture_running() noexcept { return capture_state().running.load(std::memory_order_acquire); }
+
+    size_t voice_audio_buffered_samples() noexcept {
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        return state.samples.size();
+    }
+
+    std::vector<int16_t> consume_voice_audio_samples(size_t maximum_samples) {
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        const size_t count = std::min(maximum_samples, state.samples.size());
+        std::vector<int16_t> output;
+        output.reserve(count);
+        for(size_t i = 0; i < count; ++i) { output.push_back(state.samples.front()); state.samples.pop_front(); }
+        return output;
+    }
+
+    bool consume_voice_audio_packet(std::vector<int16_t> &packet) {
+        auto &state = capture_state();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if(state.samples.size() < VOICE_AUDIO_PACKET_SAMPLES) return false;
+        packet.resize(VOICE_AUDIO_PACKET_SAMPLES);
+        for(size_t i = 0; i < VOICE_AUDIO_PACKET_SAMPLES; ++i) { packet[i] = state.samples.front(); state.samples.pop_front(); }
+        return true;
+    }
+}
