@@ -136,5 +136,6 @@ g++ -c code_injection/signature.cpp %ARGS% -o bin/code_injection__signature.o
 g++ -c math/data_types.cpp %ARGSFAST% -o bin/math__data_types.o
 
 :END
-g++ bin/* %LARGS% -L client/lua/lua/bin -llua -lws2_32 -lwinmm -lole32 -lopus -static-libgcc -static-libstdc++ -static -luserenv -static -ladvapi32 -static -o "bin/chimera.dll"
+g++ bin/* %LARGS% -shared -L client/lua/lua/bin -llua -lws2_32 -lwinmm -lole32 -lopus -static-libgcc -static-libstdc++ -static -luserenv -static -ladvapi32 -static -o "bin/chimera.dll"
+if errorlevel 1 exit /b 1
 pause
