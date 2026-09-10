@@ -113,6 +113,8 @@ g++ -c client/lua/lua_io.cpp %ARGS% -o bin/client__lua__lua_io.o
 g++ -c client/messaging/messaging.cpp -masm=intel -o bin/client__messaging__messaging.o
 
 REM Voice chat
+g++ -c client/command/voice.cpp %ARGS% -o bin/client__command__voice.o
+gcc -c client/voice_connect.S %ARGS% -o bin/client__voice_connect.o
 g++ -c client/voice_chat/audio_capture.cpp %ARGS% -o bin/client__voice_chat__audio_capture.o
 g++ -c client/voice_chat/audio_playback.cpp %ARGS% -o bin/client__voice_chat__audio_playback.o
 g++ -c client/voice_chat/voice_codec.cpp %ARGS% -o bin/client__voice_chat__voice_codec.o
