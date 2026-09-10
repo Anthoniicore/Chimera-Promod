@@ -22,17 +22,28 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+    bool voice_on_preconnect(uint32_t &ip, uint16_t &port, const char *password) noexcept;
+    void voice_on_preconnect_asm() noexcept;
+    const void *voice_continue_preconnect = nullptr;
+}
+
 namespace {
     constexpr uint32_t VOICE_NO_PLAYER_SENDER_ID = 0xFFFFFFFFu;
     constexpr uint16_t DEFAULT_VOICE_PORT = 30777;
-    constexpr uint16_t DEFAULT_HALO_PORT = 2302;
     constexpr DWORD KEEPALIVE_INTERVAL_MS = 20000;
+
+    constexpr size_t VOICE_CONNECT_HOOK_SIZE = 12;
+
     bool g_voice_frame_registered = false;
+    bool g_voice_connect_hook_installed = false;
     unsigned int g_push_to_talk_key = 'V';
     uint32_t g_sequence = 0;
     bool g_manual_transport_override = false;
     bool g_manual_voice_channel_override = false;
     DWORD g_last_voice_send_tick = 0;
+
+    BasicCodecave g_voice_connect_trampoline;
 
     std::string player_name(uint32_t player_index) {
         auto &pt = get_player_table();
@@ -84,21 +95,47 @@ namespace {
         return room == 0 ? 1 : room;
     }
 
-    bool get_current_server_ip(std::string &host) noexcept {
-        try {
-            auto address = get_signature("create_server_ip_text_sig").address();
-            if(!address) return false;
-            const uintptr_t global_address = *reinterpret_cast<uintptr_t *>(address + 2);
-            if(!global_address) return false;
-            const uint32_t ip = *reinterpret_cast<uint32_t *>(global_address);
-            in_addr addr{};
-            addr.s_addr = ip;
-            char buffer[INET_ADDRSTRLEN]{};
-            if(!inet_ntop(AF_INET, &addr, buffer, sizeof(buffer))) return false;
-            host = buffer;
-            return true;
-        }
-        catch(...) { return false; }
+    bool install_voice_connect_hook() noexcept {
+        if(g_voice_connect_hook_installed) return true;
+
+        static const short voice_on_connect_sig[] = {
+            0x83, 0xEC, 0x08, 0x55, 0x8B, 0x6C, 0x24, 0x10,
+            0x56, 0x57, 0x8B, 0xC3
+        };
+
+        static ChimeraSignature signature("voice_on_connect_sig", voice_on_connect_sig, sizeof(voice_on_connect_sig) / sizeof(short));
+        auto *target = signature.address();
+        if(!target) return false;
+
+        // Preserve complete instructions from Halo's connection function and
+        // build a trampoline that resumes immediately after the overwritten
+        // prologue. The signature is the same function used by upstream
+        // Chimera's pre-connect event.
+        std::memcpy(g_voice_connect_trampoline.data, target, VOICE_CONNECT_HOOK_SIZE);
+
+        auto *trampoline = g_voice_connect_trampoline.data;
+        trampoline[VOICE_CONNECT_HOOK_SIZE] = 0xE9;
+        const intptr_t trampoline_return = reinterpret_cast<intptr_t>(target + VOICE_CONNECT_HOOK_SIZE) -
+            reinterpret_cast<intptr_t>(trampoline + VOICE_CONNECT_HOOK_SIZE + 5);
+        *reinterpret_cast<int32_t *>(trampoline + VOICE_CONNECT_HOOK_SIZE + 1) = static_cast<int32_t>(trampoline_return);
+
+        voice_continue_preconnect = trampoline;
+
+        DWORD old_protect = 0;
+        if(!VirtualProtect(target, VOICE_CONNECT_HOOK_SIZE, PAGE_EXECUTE_READWRITE, &old_protect)) return false;
+
+        target[0] = 0xE9;
+        const intptr_t hook_offset = reinterpret_cast<intptr_t>(&voice_on_preconnect_asm) -
+            reinterpret_cast<intptr_t>(target + 5);
+        *reinterpret_cast<int32_t *>(target + 1) = static_cast<int32_t>(hook_offset);
+        std::memset(target + 5, 0x90, VOICE_CONNECT_HOOK_SIZE - 5);
+
+        DWORD ignored = 0;
+        VirtualProtect(target, VOICE_CONNECT_HOOK_SIZE, old_protect, &ignored);
+        FlushInstructionCache(GetCurrentProcess(), target, VOICE_CONNECT_HOOK_SIZE);
+
+        g_voice_connect_hook_installed = true;
+        return true;
     }
 
     void voice_frame_update() noexcept {
@@ -150,16 +187,7 @@ namespace {
     void voice_connection_watch() noexcept {
         static ServerType last_server_type = SERVER_NONE;
         const ServerType current = server_type();
-        if(current != SERVER_NONE && last_server_type == SERVER_NONE) {
-            std::string host;
-            if(get_current_server_ip(host)) {
-                Chimera::set_voice_chat_room(voice_room_id_for_server(host, DEFAULT_HALO_PORT));
-                if(!g_manual_transport_override) Chimera::set_voice_chat_transport(host, DEFAULT_VOICE_PORT);
-            }
-            g_manual_voice_channel_override = false;
-            if(!Chimera::voice_chat_enabled()) Chimera::set_voice_chat_enabled(true);
-            update_voice_frame_registration();
-        } else if(current == SERVER_NONE && last_server_type != SERVER_NONE) {
+        if(current == SERVER_NONE && last_server_type != SERVER_NONE) {
             Chimera::set_voice_chat_enabled(false);
             Chimera::shutdown_voice_transport();
             Chimera::set_voice_chat_room(0);
@@ -171,8 +199,34 @@ namespace {
     }
 }
 
+extern "C" bool voice_on_preconnect(uint32_t &ip, uint16_t &port, const char *password) noexcept {
+    (void)password;
+
+    uint8_t *ip_chars = reinterpret_cast<uint8_t *>(&ip);
+    char host[16] = {};
+    std::snprintf(host, sizeof(host), "%u.%u.%u.%u", ip_chars[3], ip_chars[2], ip_chars[1], ip_chars[0]);
+
+    Chimera::set_voice_chat_room(voice_room_id_for_server(host, port));
+
+    if(!g_manual_transport_override) {
+        Chimera::set_voice_chat_transport(host, DEFAULT_VOICE_PORT);
+    }
+
+    g_manual_voice_channel_override = false;
+
+    if(!Chimera::voice_chat_enabled()) {
+        Chimera::set_voice_chat_enabled(true);
+        update_voice_frame_registration();
+    }
+
+    return true;
+}
+
 namespace Chimera {
-    void set_up_voice_connection_watcher() noexcept { add_tick_event(voice_connection_watch); }
+    void set_up_voice_connection_watcher() noexcept {
+        install_voice_connect_hook();
+        add_tick_event(voice_connection_watch);
+    }
 
     ChimeraCommandError voice_command(size_t argc, const char **argv) noexcept {
         if(argc == 1) {
