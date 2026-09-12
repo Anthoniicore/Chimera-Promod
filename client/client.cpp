@@ -38,6 +38,7 @@
 #include "fix/widescreen_fix.h"
 #include "fix/block_camera_shake_fix.h"
 #include "fix/autoaim_width_fix.h"
+#include "fix/hitreg_net_fix.h"
 
 #include "halo_data/chat.h"
 #include "halo_data/keyboard.h"
@@ -293,6 +294,25 @@ void initialize_client() noexcept {
         "Do not go below ~0.045 or headshots can stop working.\n\n"
         "Syntax:\n"
         "  - chimera_hitreg_autoaim_width [value|false]"
+    , 0, 1, true, true);
+
+    (*commands).emplace_back("chimera_hitreg_action_queue_ticks", hitreg_action_queue_ticks_command, "hitreg",
+        "Read or set action-queue tick limits used for client/server hit reconciliation.\n"
+        "Higher values keep more actions under lag (less dropped shots), but very high\n"
+        "values can increase desync risk.\n\n"
+        "Addresses (Halo CE 1.10):\n"
+        "  sv = sv_client_action_queue_tick_limit\n"
+        "  cl = cl_remote_player_action_queue_tick_limit\n\n"
+        "Syntax:\n"
+        "  - chimera_hitreg_action_queue_ticks\n"
+        "  - chimera_hitreg_action_queue_ticks <sv|cl> <1-128>"
+    , 0, 2, true, true);
+
+    (*commands).emplace_back("chimera_hitreg_allow_client_projectiles", hitreg_allow_client_projectiles_command, "hitreg",
+        "Toggle allow_client_side_weapon_projectiles. When true, the client simulates\n"
+        "weapon projectiles locally (affects perceived hitreg vs server).\n\n"
+        "Syntax:\n"
+        "  - chimera_hitreg_allow_client_projectiles [true/false]"
     , 0, 1, true, true);
 
     // Interpolation
