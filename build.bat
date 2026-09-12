@@ -76,6 +76,7 @@ g++ -c client/fix/magnetism_fix.cpp %ARGS% -o bin/client__fix__magnetism_fix.o
 g++ -c client/fix/scope_fix.cpp %ARGS% -o bin/client__fix__scope_fix.o
 g++ -c client/fix/sniper_hud.cpp %ARGS% -o bin/client__fix__sniper_hud.o
 g++ -c client/fix/widescreen_fix.cpp %ARGS% -o bin/client__fix__widescreen_fix.o
+g++ -c client/fix/autoaim_width_fix.cpp %ARGS% -o bin/client__fix__autoaim_width_fix.o
 
 g++ -c client/halo_data/chat.cpp -masm=intel -o bin/client__halo_data__chat.o
 g++ -c client/halo_data/global.cpp %ARGS% -o bin/client__halo_data__global.o
