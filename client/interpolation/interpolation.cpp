@@ -53,7 +53,7 @@ const char ilevels[10][9] {
     {},                  // 0
     {1,1,1,0,0,0,0,0,0}, // 1
     {2,2,1,0,0,0,0,1,1}, // 2
-    {2,2,2,1,1,0,0,1,1}, // low (first person)
+    {2,2,1,1,1,0,0,1,1}, // low (first person)
     {2,2,2,2,1,1,0,1,1}, // 4
     {2,2,2,2,1,1,0,2,2}, // 5
     {2,2,2,2,2,1,1,2,2}, // medium (particles)
@@ -134,12 +134,10 @@ static void do_interpolation(uint32_t i) noexcept {
             }
 
             // Do not visually blend through a correction that the simulation
-            // could not have physically produced. This is the same protection
-            // used by the stable Chimera interpolation: a noticeable position
-            // jump with almost no corresponding velocity is treated as a
-            // network correction rather than normal movement. Interpolating
-            // such a correction can make a target look hittable while Halo's
-            // collision state is already at the corrected position.
+            // could not have physically produced. This mirrors the stable
+            // Chimera interpolation safeguard: a noticeable position jump
+            // with almost no corresponding velocity is treated as a network
+            // correction rather than normal movement.
             if(r != INTERPOLATION_NONE) {
                 static constexpr float VELOCITY_MISMATCH_DISTANCE_SQ = 0.5f * 0.5f;
                 static constexpr float VELOCITY_MISMATCH_VELOCITY_SQ = 0.5f * 0.5f;
@@ -190,8 +188,6 @@ static void interpolate_objects() noexcept {
     if(tick_count() == 0) return;
 
     // Keep presentation interpolation bounded to the current tick pair.
-    // This prevents an out-of-range frame-progress value from overshooting
-    // the current simulation state.
     if(interpolation_tick_progress < 0.0f) interpolation_tick_progress = 0.0f;
     else if(interpolation_tick_progress > 1.0f) interpolation_tick_progress = 1.0f;
 
