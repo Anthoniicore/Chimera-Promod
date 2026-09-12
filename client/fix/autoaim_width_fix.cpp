@@ -1,6 +1,9 @@
 #include "autoaim_width_fix.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <vector>
 #include <utility>
 
@@ -18,11 +21,6 @@ static constexpr std::uintptr_t AUTOAIM_WIDTH_OFFSET = 0x458;
 //   minimum safe ~0.045 (below ~0.03 headshots break)
 static constexpr float DEFAULT_TARGET_WIDTH = 0.05f;
 
-// Tag class fourCC for "bipd" (little-endian in memory as written by the engine).
-static constexpr uint32_t BIPD_TAG_CLASS = 0x64706962; // 'bipd' reversed bytes? Wait - engine stores as big-endian fourCC in the tag header.
-// Actual check matches the Lua: string.reverse of first 4 chars of the class string.
-// Safer: compare against the known integer used by Chimera / engine.
-
 struct SavedWidth {
     char *tag_data;
     float original;
@@ -32,17 +30,7 @@ static std::vector<SavedWidth> saved_widths;
 static bool currently_applied = false;
 static float current_target = DEFAULT_TARGET_WIDTH;
 
-static uint32_t bipd_fourcc() noexcept {
-    // "bipd" as stored in Halo tag headers (first dword of HaloTag).
-    // Matches the pattern used across Chimera and community scripts.
-    return 0x64706962u; // 'b','i','p','d' in little-endian memory order for the fourCC
-}
-
 void apply_autoaim_width_fix(bool enable) noexcept {
-    if (enable == currently_applied && enable) {
-        // Already on with same value - still re-apply in case map reloaded.
-    }
-
     // Always restore first if we have saved state.
     if (!saved_widths.empty()) {
         for (const auto &s : saved_widths) {
@@ -74,7 +62,6 @@ void apply_autoaim_width_fix(bool enable) noexcept {
 
         // Match biped class. The fourCC in the tag header is stored in a specific byte order.
         // Community Lua does: string.reverse(string.sub(read_string(tag), 1, 4)) == "bipd"
-        // We replicate the check robustly.
         char class_buf[5] = {};
         std::memcpy(class_buf, &tag.tag_class, 4);
         // Reverse the 4 bytes to get human-readable "bipd"
@@ -104,7 +91,7 @@ ChimeraCommandError hitreg_autoaim_width_command(size_t argc, const char **argv)
     if (argc == 0) {
         if (currently_applied) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "true (%.3f) - %zu bipeds patched", current_target, saved_widths.size());
+            std::snprintf(buf, sizeof(buf), "true (%.3f) - %zu bipeds patched", static_cast<double>(current_target), saved_widths.size());
             console_out(buf);
         } else {
             console_out("false");
@@ -131,7 +118,7 @@ ChimeraCommandError hitreg_autoaim_width_command(size_t argc, const char **argv)
     apply_autoaim_width_fix(true);
 
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "autoaim_width set to %.3f on %zu biped tags", current_target, saved_widths.size());
+    std::snprintf(buf, sizeof(buf), "autoaim_width set to %.3f on %zu biped tags", static_cast<double>(current_target), saved_widths.size());
     console_out(buf);
     return CHIMERA_COMMAND_ERROR_SUCCESS;
 }
