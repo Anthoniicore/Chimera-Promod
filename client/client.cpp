@@ -37,6 +37,7 @@
 #include "fix/sniper_hud.h"
 #include "fix/widescreen_fix.h"
 #include "fix/block_camera_shake_fix.h"
+#include "fix/autoaim_width_fix.h"
 
 #include "halo_data/chat.h"
 #include "halo_data/keyboard.h"
@@ -281,6 +282,17 @@ void initialize_client() noexcept {
         "Fixes chat disappearing after ALT+TAB.\n\n"
         "Syntax:\n"
         "  - chimera_chat_fix [true/false]"
+    , 0, 1, true, true);
+
+    // Hitreg
+    (*commands).emplace_back("chimera_hitreg_autoaim_width", hitreg_autoaim_width_command, "hitreg",
+        "Reduce biped autoaim_width to improve hit registration when the reticle is red.\n"
+        "This is the classic Devieth-style fix. Best results when the server also runs an\n"
+        "equivalent change.\n\n"
+        "Recommended value: 0.05  (stock is often ~0.08)\n"
+        "Do not go below ~0.045 or headshots can stop working.\n\n"
+        "Syntax:\n"
+        "  - chimera_hitreg_autoaim_width [value|false]"
     , 0, 1, true, true);
 
     // Interpolation
