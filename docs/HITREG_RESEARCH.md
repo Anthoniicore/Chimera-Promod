@@ -17,138 +17,122 @@ Focus areas:
 
 ---
 
+## Phase 3 status — DONE (net levers)
+
+- `client/fix/hitreg_net_fix.cpp`
+- `chimera_hitreg_action_queue_ticks [sv|cl] [1-128]`
+- `chimera_hitreg_allow_client_projectiles [true/false]`
+- Addresses: sv `0x623D78`, cl `0x623D80`, allow_client `0x624AA4`
+
+---
+
 ## Phase 2 / Deep RE findings (`haloce.exe`)
 
 Binary: Halo Custom Edition style PE32, ImageBase `0x400000`.
 
 ### 1. HS globals (autoaim / magnetism / projectiles / net queues)
 
-Globals are registered in tables (name ptr, type, value addr). Type `5` = boolean, type `8` = long/int.
-
 | Global | Type | Runtime value address | Notes |
 |--------|------|----------------------|-------|
-| `player_autoaim` | bool (5) | `0x68CD80` | Gates bullet autoaim. **No direct code xref found** — only HS table. Likely read via generic HS global accessor. |
-| `player_magnetism` | bool (5) | `0x68CD81` | Controller view stickiness. Used by `magnetism_fix` (`A0 81 CD 68 00` @ file `0x7410F`). |
-| `allow_client_side_weapon_projectiles` | bool (5) | `0x624AA4` | Client-side projectile simulation gate. Code refs @ `0xC78F7`, `0xC790C`. |
-| `projectile_incremental_rate` | long (8) | `0x624AAC` | Related to projectile update rate. |
-| `weapon_incremental_rate` | long (8) | `0x624AA8` | |
-| `sv_client_action_queue_limit` | long (8) | `0x623D74` | Server-side client action queue size. |
-| `sv_client_action_queue_tick_limit` | long (8) | `0x623D78` | **Hit reconciliation relevant.** Code ref @ `0x79549`. |
-| `cl_remote_player_action_queue_limit` | long (8) | `0x623D7C` | Client remote player queue size. |
-| `cl_remote_player_action_queue_tick_limit` | long (8) | `0x623D80` | **Hit reconciliation relevant.** Code ref @ `0x799BB`. |
+| `player_autoaim` | bool (5) | `0x68CD80` | Gates bullet autoaim. No direct `.text` xref — HS accessor only. |
+| `player_magnetism` | bool (5) | `0x68CD81` | Controller stick magnetism (`A0 81 CD 68 00` @ `0x7410F`). |
+| `allow_client_side_weapon_projectiles` | bool (5) | `0x624AA4` | Refs @ `0xC78F7`, `0xC790C`. |
+| `sv_client_action_queue_tick_limit` | long (8) | `0x623D78` | Ref @ `0x79549`. |
+| `cl_remote_player_action_queue_tick_limit` | long (8) | `0x623D80` | Ref @ `0x799BB`. |
 
-String file offsets (for signature anchors):
-```
-player_magnetism                              0x205AA0
-player_autoaim                                0x205AB4
-ai_render_projectile_aiming                   0x206608
-debug_objects_biped_autoaim_pills             0x2073B0
-cl_remote_player_action_queue_tick_limit      0x20780C
-sv_client_action_queue_tick_limit             0x20785C
-multiplayer_hit_sound_volume                  0x2078A0
-projectile_incremental_rate                   0x208A6C
-allow_client_side_weapon_projectiles          0x208ABC
-```
+### 2. Controller magnetism (NOT bullet bend)
 
-### 2. Existing Chimera magnetism signatures (verified in this binary)
-
-| Signature | File offset | Role |
-|-----------|-------------|------|
-| `magnetism_sig` pattern | `0x73F52` | Controller magnetism path (`84 C0 0F 84 ... 8A ... 84 ... 8A`) |
-| `player_magnetism_enabled_sig` | `0x7410F` | `A0 81 CD 68 00 83 C4 10 84 C0 0F 84` — reads `player_magnetism` |
-
-These are **controller aim-stick magnetism**, not bullet trajectory autoaim.
-
-### 3. Biped `autoaim_width` (offset 0x458) code usage
-
-Three sites load a dword from `[reg+0x458]` in `.text`:
-
-| File offset | Bytes | Interpretation |
-|-------------|-------|----------------|
-| `0x15D91C` | `8B 85 58 04 00 00` | `mov eax, [ebp+0x458]` |
-| `0x15D95E` | `8B 85 58 04 00 00` | same |
-| `0x15D9B0` | `8B 85 58 04 00 00` | same |
-
-Surrounding code copies vectors / does FP ops (`fld`, `fmul`) — consistent with building autoaim pill geometry from biped tag fields (width + head/pelvis nodes). This is **read-side** (pill construction), not the projectile bend itself.
-
-**Signature candidate (pill build / autoaim width read):**
-```
-8B 85 58 04 00 00    ; mov eax, [ebp+0x458]  ; autoaim_width
-```
-Context differs slightly per site; prefer unique surrounding bytes for a Chimera sig.
-
-### 4. Action queue / hit reconciliation
-
-Halo CE is **server-authoritative** for hits. Clients send actions into queues; the server simulates and decides hits.
-
-Relevant globals (live addresses):
-- `sv_client_action_queue_tick_limit` @ `0x623D78` — how many ticks of client actions the server keeps
-- `cl_remote_player_action_queue_tick_limit` @ `0x623D80` — client-side remote player action history
-
-Code that references these:
-- Server tick limit usage near file `0x79549`
-- Client remote tick limit usage near file `0x799BB`
-
-Also:
-- `allow_client_side_weapon_projectiles` @ `0x624AA4` — when true, client simulates weapon projectiles locally (can affect perceived hitreg vs server).
-
-**Practical lever:** Tuning tick limits (within safe ranges) can reduce action drops under lag. Aggressive values risk desync / rubber-banding. Needs in-game measurement.
-
-### 5. What we still need for full projectile-autoaim RE
-
-The actual **trajectory bend** (when reticle is red, projectiles curve toward the autoaim pill) was **not** isolated to a single signature yet. Likely path:
-
-1. Weapon fire → create projectile with initial direction
-2. Autoaim test: is any biped pill inside weapon `autoaim angle` + `autoaim range`?
-3. If yes and `player_autoaim` enabled → blend projectile forward vector toward pill center
-4. Projectile then simulates with (possibly bent) direction
-
-Next RE steps:
-1. Find writers/readers of weapon tag `autoaim angle` / `autoaim range` (c20 weapon fields).
-2. Cross-ref from `debug_objects_biped_autoaim_pills` draw path (string @ `0x2073B0`, table xref @ `0x2258D8`) — debug draw often sits next to the real test.
-3. Find projectile spawn / direction init and any `player_autoaim` check via HS global get (generic), not hard-coded `0x68CD80`.
-4. Optional: compare with Xbox decomp (`halo-re/halo`) / HCEA symbol corpus for function names.
+| Sig | File offset | Role |
+|-----|-------------|------|
+| `magnetism_sig` | `0x73F52` | Stick magnetism |
+| `player_magnetism_enabled_sig` | `0x7410F` | Reads `player_magnetism` |
 
 ---
 
-## Recommended next implementations (no interpolation touch)
+## Phase 4 — Projectile bend RE (in progress)
 
-### A. Already shipped
-- `chimera_hitreg_autoaim_width` — primary practical hitreg win when server agrees.
+### Mechanism (confirmed by c20.reclaimers)
 
-### B. Safe experimental commands (proposed)
-1. **`chimera_hitreg_action_queue_ticks <sv|cl> <n>`**  
-   Read/write `sv_client_action_queue_tick_limit` / `cl_remote_player_action_queue_tick_limit` at runtime.  
-   Addresses: `0x623D78` / `0x623D80` (validate with signature before write).
+When a biped **autoaim pill** lies inside the weapon's **autoaim angle** + **autoaim range**, projectile paths are **pulled toward the pill**. That is the red-reticle / bullet-magnetism behaviour.
 
-2. **`chimera_hitreg_allow_client_projectiles [true/false]`**  
-   Toggle `allow_client_side_weapon_projectiles` @ `0x624AA4` for testing perceived vs actual hits.
+- **Weapon tag:** `autoaim angle`, `autoaim range` (and separate magnetism angle/range for controller stick).
+- **Biped tag:** `autoaim width` (+ head/pelvis nodes for pill shape).
+- Flag `aim assists only when zoomed` on weapon disables this when unzoomed (sniper).
 
-3. **Signature for biped autoaim_width read** (logging/assert only) using the `0x15D91C` region.
+### Call graph mapped in this binary
 
-### C. Deeper (later)
-- Hook projectile direction finalization once located.
-- Optional server Lua package documenting Devieth values for hosts.
+```
+Fire / targeting path
+  func @ 0x78370  (prologue 55 8B EC 83 EC 78)
+    │
+    ├─ calls autoaim evaluation @ 0x15D9C0   sites: 0x78521, 0x785BE, 0x78759, ...
+    │     │
+    │     └─ uses pill geometry builder
+    │
+    └─ on success (al/bl flag): continues toward projectile spawn / direction setup
 
----
-
-## Signature sketches (for `client_signature.cpp`)
-
-```cpp
-// player_magnetism byte (already partially covered by magnetism_fix)
-// A0 81 CD 68 00 83 C4 10 84 C0 0F 84
-const short player_magnetism_enabled_sig[] = {
-    0xA0, 0x81, 0xCD, 0x68, 0x00, 0x83, 0xC4, 0x10, 0x84, 0xC0, 0x0F, 0x84
-};
-
-// sv_client_action_queue_tick_limit usage (anchor near 0x79549)
-// Need unique bytes — dump more context before committing.
-
-// allow_client_side_weapon_projectiles (anchor near 0xC78F7)
-// Need unique bytes — dump more context before committing.
+Pill geometry (reads autoaim_width)
+  func @ 0x15D850
+    loads [ebp+0x458] at 0x15D91C / 0x15D95E / 0x15D9B0
+    head/pelvis node vectors + width → pill capsule/sphere
+    single external caller: 0x5AC08
 ```
 
-Absolute addresses above are for this specific CE 1.10-class binary. Prefer byte signatures over hard-coded VAs when integrating into Chimera.
+### Key sites
+
+| VA / file offset | Role |
+|------------------|------|
+| `0x78370` | Fire/targeting function that invokes autoaim test |
+| `0x78521` | `call 0x15D9C0` — autoaim evaluation; result in `bl`/`al` |
+| `0x15D9C0` | Large autoaim evaluation (object resolution, vector math, range tests) |
+| `0x15D850` | Builds autoaim pill; **reads biped +0x458** |
+| `0x5AC08` | Caller of pill builder |
+| `0x15D91C` etc. | `mov eax, [ebp+0x458]` autoaim_width |
+
+### Signature candidates (bend pipeline)
+
+**A — Pill width read (stable):**
+```
+8B 85 58 04 00 00          ; mov eax, [ebp+0x458]
+```
+Prefer with surrounding unique bytes from `0x15D910`:
+```
+8B 49 08 89 4E 08 8B 85 58 04 00 00
+```
+
+**B — Autoaim eval call from fire path (`0x78521` region):**
+```
+6A 01 6A 00 6A 00 68 00 00 00 40 6A 00 57 52
+; then E8 rel32 → 0x15D9C0
+```
+
+**C — Fire function prologue:**
+```
+55 8B EC 83 EC 78 8B 45 08
+```
+
+### What is NOT pinned yet
+
+1. **Exact instruction that blends projectile forward** toward the pill center after a successful autoaim test (the true “bend”).
+2. **Weapon tag byte offsets** for `autoaim angle` / `autoaim range` inside this binary’s in-memory layout (field order known from c20; numeric offsets still to lock).
+3. **`player_autoaim` gate** in the fire path (likely via generic HS get, not `mov` from `0x68CD80`).
+
+### Next RE steps (concrete)
+
+1. From return of `0x15D9C0` at `0x78521`, follow the **true** branch and locate where a direction vector (3 floats) is written into projectile / firing data.
+2. Cross-check with projectile creation routines (search for projectile tag class / spawn helpers used by weapon triggers).
+3. Optional: enable `debug_objects_biped_autoaim_pills` in-game and breakpoint draw path to confirm live addresses.
+4. Optional: pull function names from `halo-re/halo` or HCEA corpus for the same pipeline.
+
+### Practical impact of bend RE
+
+| Hook target | What we could do |
+|-------------|------------------|
+| Pill width (already have) | Stronger/weaker engage via `autoaim_width` |
+| Autoaim test result | Log when bend is eligible (debug) |
+| Direction blend | Scale bend strength, force on/off, diagnostics |
+
+Until the blend site is signed, **tuning `autoaim_width` remains the main practical lever** for hitreg.
 
 ---
 
@@ -161,4 +145,4 @@ Absolute addresses above are for this specific CE 1.10-class binary. Prefer byte
 ---
 
 *Branch: `hitreg`*
-*Deep RE pass: 2026-09-12 against provided `haloce.exe`*
+*Projectile bend RE pass: 2026-09-13*
