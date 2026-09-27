@@ -26,6 +26,8 @@ jobs:
           install: >-
             mingw-w64-i686-gcc
             mingw-w64-i686-binutils
+            mingw-w64-i686-opus
+            mingw-w64-i686-pkgconf
 
       - name: Check toolchain
         shell: msys2 {0}
@@ -34,6 +36,7 @@ jobs:
           g++ --version
           windres --version
           ar --version
+          pkg-config --modversion opus
 
       - name: Build Chimera-Promod
         shell: msys2 {0}
